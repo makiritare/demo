@@ -10,6 +10,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.io.File
@@ -18,8 +21,6 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-
-/* make app to download mp3 files from webpage */
 @Composable
 @Preview
 fun app() {
@@ -27,21 +28,22 @@ fun app() {
         val colorBack = 0x00FFFF
         var linkOfBook by remember { mutableStateOf("") }
         var titleOfBook by remember { mutableStateOf("") }
-        var downloadClicked by remember { mutableStateOf(false) } // new state variable
-        var mp3List by remember { mutableStateOf(mutableListOf<String>()) }
-        var error by remember { mutableStateOf(false) } // new state variable for error message
+        var downloadClicked by remember { mutableStateOf(false) }
+        var mp3List by remember { mutableStateOf(listOf<String>()) }
+        var error by remember { mutableStateOf(false) }
+        var downloadProgress by remember { mutableStateOf(mapOf<String, Float>()) }
 
-        Column (
+        Column(
             modifier = Modifier.background(Color(color = colorBack)).fillMaxHeight().fillMaxWidth()
         ) {
             OutlinedTextField(
                 value = linkOfBook,
-                onValueChange = { linkOfBook = it},
+                onValueChange = { linkOfBook = it },
                 label = { Text(text = "Link of the Book to download") },
                 placeholder = {},
                 modifier = Modifier.padding(16.dp).fillMaxWidth()
             )
-            Row( modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween){
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 OutlinedTextField(
                     value = titleOfBook,
                     onValueChange = { titleOfBook = it },
@@ -49,7 +51,6 @@ fun app() {
                     placeholder = {},
                     modifier = Modifier.padding(16.dp).width(450.dp)
                 )
-                // add DownloadButton
                 ListFilesButton(
                     onClick = {
                         if (isValidUrl(linkOfBook)) {
@@ -59,8 +60,8 @@ fun app() {
                             error = true
                         }
                     },
-                    //modifier of button to align to the right of the screen
-                    modifier = Modifier.padding(top = 24.dp, end = (16.dp)).height(56.dp) )
+                    modifier = Modifier.padding(top = 24.dp, end = (16.dp)).height(56.dp)
+                )
             }
             if (error) {
                 Text(
@@ -69,56 +70,61 @@ fun app() {
                     modifier = Modifier.padding(16.dp)
                 )
             } else if (downloadClicked) {
-                mp3List = getMp3FromWebPage(linkOfBook)
-                //add lazy column to display the files to download using FileToDownload and mp3List
-                    LazyColumn(modifier = Modifier.padding(16.dp)
+                GlobalScope.launch(Dispatchers.IO) {
+                    mp3List = getMp3FromWebPage(linkOfBook)
+                }
+                LazyColumn(
+                    modifier = Modifier.padding(16.dp)
                         .height(300.dp)
                         .fillMaxWidth()
                         .background(Color.Gray)
-                    ){
-                        //add lazy column to display the files to download using FileToDownload and mp3List
-                        items(mp3List) { file ->
-                            FileToDownload(file)
+                ) {
+                    items(mp3List) { file ->
+                        FileToDownload(file, downloadProgress[file] ?: 0f)
+                    }
+                }
+            }
+            DownloadButton(
+                onClick = {
+                    GlobalScope.launch(Dispatchers.IO) {
+                        downloadMp3Files(mp3List, titleOfBook) { url, progress ->
+                            downloadProgress = downloadProgress.toMutableMap().apply {
+                                this[url] = progress
+                            }
                         }
                     }
-            }
-        //add button to download files
-        DownloadButton(
-            onClick = {
-                downloadMp3Files(mp3List, titleOfBook)
-            },
-            //padding to bottom of screen
-            modifier = Modifier.padding(bottom = 20.dp)
-        )
+                },
+                modifier = Modifier.padding(bottom = 20.dp)
+            )
         }
     }
 }
 
-//DownloadButton
+    //DownloadButton
 @Composable
-fun DownloadButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.padding(16.dp).fillMaxWidth()
+    fun DownloadButton(
+        onClick: () -> Unit,
+        modifier: Modifier = Modifier
     ) {
-        Text("Download Book")
+        Button(
+            onClick = onClick,
+            modifier = Modifier.padding(16.dp).fillMaxWidth()
+        ) {
+            Text("Download Book")
+        }
     }
-}
 
-//create a class to be used in the lazy column to display the files to download with padding and a loading bar
 @Composable
 fun FileToDownload(
     file: String,
+    progress: Float,
     modifier: Modifier = Modifier
 ) {
     Row(modifier = modifier.padding(4.dp)) {
         Text(getSecondToLastElement(file) + "_" + file.substringAfterLast("/"))
         Spacer(modifier = Modifier.width(2.dp))
         LinearProgressIndicator(
-            progress = 0.0f,
+            progress = progress,
             modifier = Modifier.weight(1f).height(12.dp)
         )
     }
@@ -127,11 +133,9 @@ fun FileToDownload(
 fun getSecondToLastElement(url: String): String {
     val urlArray = url.split("/")
     val secondToLastElement = urlArray.getOrNull(urlArray.size - 2) ?: ""
-    //return capitalized first letter and the rest should be lowercase
     return secondToLastElement.replace("%20", "_").lowercase().capitalize()
 }
 
-//ListFilesButton
 @Composable
 fun ListFilesButton(
     onClick: () -> Unit,
@@ -145,7 +149,6 @@ fun ListFilesButton(
     }
 }
 
-// function to check if a given string is a valid URL
 fun isValidUrl(url: String): Boolean {
     return try {
         URL(url).toURI()
@@ -155,8 +158,7 @@ fun isValidUrl(url: String): Boolean {
     }
 }
 
-//function to get all the mp3 files from the webpage using jsoup and save them to an array using linkOfBook as the url and using FileToDownload to show download progress
-fun getMp3FromWebPage(linkOfBook: String): MutableList<String> {
+fun getMp3FromWebPage(linkOfBook: String): List<String> {
     val mp3List = mutableListOf<String>()
     try {
         val doc: Document = Jsoup.connect(linkOfBook).get()
@@ -173,8 +175,11 @@ fun getMp3FromWebPage(linkOfBook: String): MutableList<String> {
     return mp3List
 }
 
-//function named downloadMp3Files to download the mp3 files from the array and save them to the local machine using titleOfBook as the name of the folder and getSecondToLastElement to rename, set LinearProgressIndicator to show download progress
-fun downloadMp3Files(mp3List: MutableList<String>, titleOfBook: String) {
+fun downloadMp3Files(
+    mp3List: List<String>,
+    titleOfBook: String,
+    onProgress: (String, Float) -> Unit
+) {
     val folder = File(titleOfBook)
     if (!folder.exists()) {
         folder.mkdir()
@@ -189,16 +194,18 @@ fun downloadMp3Files(mp3List: MutableList<String>, titleOfBook: String) {
         val data = ByteArray(4096)
         var total: Long = 0
         var count: Int
+        val fileSize = connection.contentLengthLong
         while (input.read(data).also { count = it } != -1) {
             total += count.toLong()
             output.write(data, 0, count)
+            onProgress(mp3, total.toFloat() / fileSize.toFloat())
         }
         output.close()
         input.close()
     }
 }
+
 fun main() = application {
-    //change size of window
     Window(
         onCloseRequest = ::exitApplication,
         title = "Title",
